@@ -79,6 +79,7 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
         void onCodeInput(int primaryCode, int x, int y, boolean isKeyRepeat);
         void onTextInput(final String rawText);
         void removeSuggestion(final String word);
+        void onClipboardSuggestionPicked();
         CharSequence getSelection();
     }
 
@@ -91,6 +92,7 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
     private final Drawable mIncognitoIcon;
     private final Drawable mToolbarArrowIcon;
     private final Drawable mBinIcon;
+    private final Drawable mCloseIcon;
     private final ViewGroup mToolbar;
     private final View mToolbarContainer;
     private final ViewGroup mPinnedKeys;
@@ -114,6 +116,7 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
     private final SuggestionStripLayoutHelper mLayoutHelper;
     private final StripVisibilityGroup mStripVisibilityGroup;
     private boolean isInlineAutofillSuggestionsVisible = false; // Required to disable the more suggestions if inline autofill suggestions are visible
+    private View mCurrentInlineAutofillSuggestionsView;
 
     private static class StripVisibilityGroup {
         private final View mSuggestionStripView;
@@ -190,6 +193,7 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
         mIncognitoIcon = keyboardAttr.getDrawable(R.styleable.Keyboard_iconIncognitoKey);
         mToolbarArrowIcon = keyboardAttr.getDrawable(R.styleable.Keyboard_iconToolbarKey);
         mBinIcon = keyboardAttr.getDrawable(R.styleable.Keyboard_iconBin);
+        mCloseIcon = keyboardAttr.getDrawable(R.styleable.Keyboard_iconClose);
 
         final LinearLayout.LayoutParams toolbarKeyLayoutParams = new LinearLayout.LayoutParams(
                 getResources().getDimensionPixelSize(R.dimen.config_suggestions_strip_edge_key_width),
@@ -259,7 +263,6 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
                 : km.isKeyguardLocked();
         mToolbarExpandKey.setOnClickListener(hideToolbarKeys ? null : this);
         mPinnedKeys.setVisibility(hideToolbarKeys ? GONE : VISIBLE);
-        isInlineAutofillSuggestionsVisible = false;
     }
 
     public void setRtl(final boolean isRtlLanguage) {
@@ -280,12 +283,25 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
         mSuggestedWords = suggestedWords;
         mStartIndexOfMoreSuggestions = mLayoutHelper.layoutAndReturnStartIndexOfMoreSuggestions(
                 getContext(), mSuggestedWords, mSuggestionsStrip, this);
+        setInlineSuggestionsView(mCurrentInlineAutofillSuggestionsView);
     }
 
     public void setInlineSuggestionsView(final View view) {
-        clear();
-        isInlineAutofillSuggestionsVisible = true;
-        mSuggestionsStrip.addView(view);
+        if (isInlineAutofillSuggestionsVisible) {
+            mSuggestionsStrip.removeView(mCurrentInlineAutofillSuggestionsView);
+            isInlineAutofillSuggestionsVisible = false;
+            mCurrentInlineAutofillSuggestionsView = null;
+        }
+        if (view != null) {
+            isInlineAutofillSuggestionsVisible = true;
+            mSuggestionsStrip.addView(view);
+            mCurrentInlineAutofillSuggestionsView = view;
+            setToolbarVisibility(false);
+        }
+    }
+
+    public boolean isInlineAutofillSuggestionsVisible(){
+        return isInlineAutofillSuggestionsVisible;
     }
 
     @Override
@@ -301,8 +317,9 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
     }
 
     @SuppressLint("ClickableViewAccessibility") // why would "null" need to call View#performClick?
-    private void clear() {
+    public void clear() {
         mSuggestionsStrip.removeAllViews();
+        isInlineAutofillSuggestionsVisible = false;
         if (DEBUG_SUGGESTIONS)
             removeAllDebugInfoViews();
         if (mToolbarContainer.getVisibility() != VISIBLE)
@@ -417,10 +434,10 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
                 showIcon = false;
         }
         if (showIcon) {
-            final Drawable icon = mBinIcon;
-            Settings.getInstance().getCurrent().mColors.setColor(icon, ColorType.REMOVE_SUGGESTION_ICON);
-            int w = icon.getIntrinsicWidth();
-            int h = icon.getIntrinsicWidth();
+            final Drawable icon = mSuggestedWords.isClipboardSuggestion() ? mCloseIcon : mBinIcon;
+            Settings.getInstance().getCurrent().mColors.setColor(icon, ColorType.SUGGESTION_ICONS);
+            int w = wordView.getWidth();
+            int h = wordView.getHeight();
             wordView.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null);
             wordView.setEllipsize(TextUtils.TruncateAt.END);
             AtomicBoolean downOk = new AtomicBoolean(false);
@@ -470,6 +487,12 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
 
     private void removeSuggestion(TextView wordView) {
         final String word = wordView.getText().toString();
+        // if it's a clipboard suggestion, clear the clipboard
+        if (mSuggestedWords.isClipboardSuggestion()) {
+            mListener.onClipboardSuggestionPicked();
+            SuggestedWords.clearSuggestedWordInfoList(mSuggestedWords);
+            setToolbarVisibility(true);
+        }
         mListener.removeSuggestion(word);
         mMoreSuggestionsView.dismissPopupKeysPanel();
         // show suggestions, but without the removed word
@@ -497,6 +520,7 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
                 mSuggestedWords.mSequenceNumber);
         mStartIndexOfMoreSuggestions = mLayoutHelper.layoutAndReturnStartIndexOfMoreSuggestions(
                 getContext(), mSuggestedWords, mSuggestionsStrip, SuggestionStripView.this);
+        setInlineSuggestionsView(mCurrentInlineAutofillSuggestionsView);
         mStripVisibilityGroup.showSuggestionsStrip();
     }
 
@@ -679,6 +703,16 @@ public final class SuggestionStripView extends RelativeLayout implements OnClick
                 return;
             }
             final SuggestedWordInfo wordInfo = mSuggestedWords.getInfo(index);
+            if (wordInfo.isKindOf(SuggestedWordInfo.KIND_CLIPBOARD)) {
+                mListener.onClipboardSuggestionPicked();
+                if (mSuggestedWords.mInputStyle == SuggestedWords.INPUT_STYLE_PASSWORD) {
+                    // make sure the latest clipboard entry
+                    // is pasted since the content is hidden
+                    onLongClickClipboardKey();
+                    clear();
+                    return;
+                }
+            }
             mListener.pickSuggestionManually(wordInfo);
         }
     }

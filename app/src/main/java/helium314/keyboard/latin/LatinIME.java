@@ -63,6 +63,7 @@ import helium314.keyboard.latin.common.ColorType;
 import helium314.keyboard.latin.common.Constants;
 import helium314.keyboard.latin.common.CoordinateUtils;
 import helium314.keyboard.latin.common.InputPointers;
+import helium314.keyboard.latin.common.StringUtilsKt;
 import helium314.keyboard.latin.common.ViewOutlineProviderUtilsKt;
 import helium314.keyboard.latin.define.DebugFlags;
 import helium314.keyboard.latin.define.ProductionFlags;
@@ -78,6 +79,7 @@ import helium314.keyboard.latin.touchinputconsumer.GestureConsumer;
 import helium314.keyboard.latin.utils.ColorUtilKt;
 import helium314.keyboard.latin.utils.InlineAutofillUtils;
 import helium314.keyboard.latin.utils.InputMethodPickerKt;
+import helium314.keyboard.latin.utils.InputTypeUtils;
 import helium314.keyboard.latin.utils.JniUtils;
 import helium314.keyboard.latin.utils.LeakGuardHandlerWrapper;
 import helium314.keyboard.latin.utils.Log;
@@ -1020,6 +1022,10 @@ public class LatinIME extends InputMethodService implements
             // Space state must be updated before calling updateShiftState
             switcher.requestUpdatingShiftState(getCurrentAutoCapsState(), getCurrentRecapitalizeState());
         }
+        // This will remove old "stuck" inline suggestions
+        if (hasSuggestionStripView()) {
+            mSuggestionStripView.setInlineSuggestionsView(null);
+        }
         // This will set the punctuation suggestions if next word suggestion is off;
         // otherwise it will clear the suggestion strip.
         setNeutralSuggestionStrip();
@@ -1309,7 +1315,7 @@ public class LatinIME extends InputMethodService implements
     public boolean onInlineSuggestionsResponse(InlineSuggestionsResponse response) {
         Log.d(TAG,"onInlineSuggestionsResponse called");
         final List<InlineSuggestion> inlineSuggestions = response.getInlineSuggestions();
-        if (inlineSuggestions.isEmpty()) {
+        if (inlineSuggestions.isEmpty() || mSuggestionStripView.isInlineAutofillSuggestionsVisible()) {
             return false;
         }
 
@@ -1573,7 +1579,7 @@ public class LatinIME extends InputMethodService implements
         final SettingsValues currentSettingsValues = mSettings.getCurrent();
         mInputLogic.setSuggestedWords(suggestedWords);
         // TODO: Modify this when we support suggestions with hard keyboard
-        if (!hasSuggestionStripView()) {
+        if (!hasSuggestionStripView() || mSuggestionStripView.isInlineAutofillSuggestionsVisible()) {
             return;
         }
         if (!onEvaluateInputViewShown()) {
@@ -1584,6 +1590,7 @@ public class LatinIME extends InputMethodService implements
                 currentSettingsValues.isApplicationSpecifiedCompletionsOn()
                         && suggestedWords.isEmpty();
         final boolean noSuggestionsFromDictionaries = suggestedWords.isEmpty()
+                || suggestedWords.isClipboardSuggestion()
                 || suggestedWords.isPunctuationSuggestions()
                 || isEmptyApplicationSpecifiedCompletions;
 
@@ -1614,6 +1621,7 @@ public class LatinIME extends InputMethodService implements
             setNeutralSuggestionStrip();
         } else {
             setSuggestedWords(suggestedWords);
+            mSuggestionStripView.setToolbarVisibility(false);
         }
         // Cache the auto-correction in accessibility code so we can speak it if the user
         // touches a key that will insert it.
@@ -1632,15 +1640,50 @@ public class LatinIME extends InputMethodService implements
         updateStateAfterInputTransaction(completeInputTransaction);
     }
 
-    // This will show either an empty suggestion strip (if prediction is enabled) or
-    // punctuation suggestions (if it's disabled).
+    @Override
+    public void onClipboardSuggestionPicked(){
+        mClipboardHistoryManager.markSuggestionAsPicked();
+    }
+
+    // When there is no need to lookup suggestions yet (such as at the very start of an input field),
+    // this will show a suggestion of the primary clipboard (if there is one and the setting is enabled)
+    // or the toolbar view (if no clipboard suggestion is to be created).
+    // Otherwise, an empty suggestion strip (if prediction is enabled)
+    // or punctuation suggestions (if it's disabled) will be shown.
     @Override
     public void setNeutralSuggestionStrip() {
         final SettingsValues currentSettings = mSettings.getCurrent();
-        final SuggestedWords neutralSuggestions = currentSettings.mBigramPredictionEnabled
-                ? SuggestedWords.getEmptyInstance()
-                : currentSettings.mSpacingAndPunctuations.mSuggestPuncList;
-        setSuggestedWords(neutralSuggestions);
+        final int codePoint = mInputLogic.mConnection.getCodePointBeforeCursor();
+        // by default or after a newline show a clipboard suggestion or the toolbar
+        if (codePoint == Constants.NOT_A_CODE || codePoint == Constants.CODE_ENTER) {
+            if (currentSettings.mSuggestClipboardContent) {
+                final String clipContent = mClipboardHistoryManager.retrieveRecentClipboardContent();
+                if (!clipContent.isEmpty()) {
+                    final EditorInfo editorInfo = getCurrentInputEditorInfo();
+                    final int inputType = (editorInfo != null) ? editorInfo.inputType : InputType.TYPE_NULL;
+                    // make sure clipboard content that is not a number is not suggested in a number input type
+                    if (!InputTypeUtils.isNumberInputType(inputType) || StringUtilsKt.isValidNumber(clipContent)) {
+                        setSuggestedWords(mInputLogic.getClipboardSuggestion(clipContent, inputType));
+                        mSuggestionStripView.setToolbarVisibility(false);
+                        return;
+                    }
+                }
+            }
+            if (hasSuggestionStripView()) {
+                clearSuggestions();
+                mSuggestionStripView.setToolbarVisibility(true);
+                return;
+            }
+        }
+        if (!currentSettings.mBigramPredictionEnabled) {
+            setSuggestedWords(currentSettings.mSpacingAndPunctuations.mSuggestPuncList);
+            return;
+        }
+        setSuggestedWords(SuggestedWords.getEmptyInstance());
+    }
+
+    public void clearSuggestions(){
+        mSuggestionStripView.clear();
     }
 
     @Override

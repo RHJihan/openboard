@@ -56,6 +56,7 @@ final class SuggestionStripLayoutHelper {
     private static final int DEFAULT_MAX_MORE_SUGGESTIONS_ROW = 2;
     private static final int PUNCTUATIONS_IN_STRIP = 5;
     private static final float MIN_TEXT_XSCALE = 0.70f;
+    private static final int MAX_PASSWORD_LENGTH = 12;
 
     public final int mPadding;
     public final int mDividerWidth;
@@ -82,6 +83,8 @@ final class SuggestionStripLayoutHelper {
     private final float mCenterSuggestionWeight;
     private final int mCenterPositionInStrip;
     private final int mTypedWordPositionWhenAutocorrect;
+    private final int mSuggestionTextPadding;
+    private final Drawable mClipboardIcon;
     private final Drawable mMoreSuggestionsHint;
     private static final String MORE_SUGGESTIONS_HINT = "…";
 
@@ -137,6 +140,11 @@ final class SuggestionStripLayoutHelper {
                 R.styleable.SuggestionStripView_minMoreSuggestionsWidth, 1.0f);
         a.recycle();
 
+        final TypedArray keyboardAttr = context.obtainStyledAttributes(attrs, R.styleable.Keyboard, defStyle, R.style.SuggestionStripView);
+        mClipboardIcon = keyboardAttr.getDrawable(R.styleable.Keyboard_iconClipboardNormalKey);
+        keyboardAttr.recycle();
+
+        mSuggestionTextPadding = context.getResources().getDimensionPixelSize(R.dimen.config_suggestion_text_horizontal_padding);
         mMoreSuggestionsHint = getMoreSuggestionsHint(res,
                 res.getDimension(R.dimen.config_more_suggestions_hint_text_size),
                 colorMoreSuggestionsHint);
@@ -191,6 +199,11 @@ final class SuggestionStripLayoutHelper {
             return null;
         }
         final String word = suggestedWords.getLabel(indexInSuggestedWords);
+        // If input type of the editor is that of a password, make sure the content is redacted
+        if (suggestedWords.mInputStyle == SuggestedWords.INPUT_STYLE_PASSWORD) {
+            int maskLength = Math.min(word.length(), MAX_PASSWORD_LENGTH);
+            return "*".repeat(maskLength);
+        }
         // TODO: don't use the index to decide whether this is the auto-correction/typed word, as
         // this is brittle
         final boolean isAutoCorrection = suggestedWords.mWillAutoCorrect
@@ -339,14 +352,27 @@ final class SuggestionStripLayoutHelper {
         final int stripWidth = stripView.getWidth();
         final int centerWidth = getSuggestionWidth(mCenterPositionInStrip, stripWidth);
         if (wordCountToShow == 1 || getTextScaleX(centerWordView.getText(), centerWidth,
-                centerWordView.getPaint()) < MIN_TEXT_XSCALE) {
+                centerWordView.getPaint()) < MIN_TEXT_XSCALE || suggestedWords.isClipboardSuggestion()) {
             // Layout only the most relevant suggested word at the center of the suggestion strip
             // by consolidating all slots in the strip.
             final int countInStrip = 1;
             mMoreSuggestionsAvailable = (wordCountToShow > countInStrip);
             layoutWord(context, mCenterPositionInStrip, stripWidth - mPadding);
+            final int layoutWidth;
+            final float layoutWeight;
+            if (suggestedWords.isClipboardSuggestion()) {
+                Settings.getInstance().getCurrent().mColors.setColor(mClipboardIcon, ColorType.SUGGESTION_ICONS);
+                centerWordView.setCompoundDrawablesWithIntrinsicBounds(mClipboardIcon, null, null, null);
+                centerWordView.setCompoundDrawablePadding(mSuggestionTextPadding);
+                centerWordView.setEllipsize(TextUtils.TruncateAt.END);
+                layoutWidth = ViewGroup.LayoutParams.WRAP_CONTENT;
+                layoutWeight = 0.0f;
+            } else {
+                layoutWidth = 0;
+                layoutWeight = 1.0f;
+            }
             stripView.addView(centerWordView);
-            setLayoutWeight(centerWordView, 1.0f, ViewGroup.LayoutParams.MATCH_PARENT);
+            setLayoutWeightAndSize(centerWordView, layoutWeight, layoutWidth, ViewGroup.LayoutParams.MATCH_PARENT);
             if (SuggestionStripView.DEBUG_SUGGESTIONS) {
                 layoutDebugInfo(mCenterPositionInStrip, placerView, stripWidth);
             }
@@ -369,7 +395,7 @@ final class SuggestionStripLayoutHelper {
             final int width = getSuggestionWidth(positionInStrip, stripWidth);
             final TextView wordView = layoutWord(context, positionInStrip, width);
             stripView.addView(wordView);
-            setLayoutWeight(wordView, getSuggestionWeight(positionInStrip), ViewGroup.LayoutParams.MATCH_PARENT);
+            setLayoutWeightAndSize(wordView, getSuggestionWeight(positionInStrip), 0, ViewGroup.LayoutParams.MATCH_PARENT);
             x += wordView.getMeasuredWidth();
 
             if (SuggestionStripView.DEBUG_SUGGESTIONS) {
@@ -510,17 +536,17 @@ final class SuggestionStripLayoutHelper {
             wordView.setCompoundDrawables(null, null, null, null);
             wordView.setTextColor(mColorAutoCorrect);
             stripView.addView(wordView);
-            setLayoutWeight(wordView, 1.0f, mSuggestionsStripHeight);
+            setLayoutWeightAndSize(wordView, 1.0f, 0, mSuggestionsStripHeight);
         }
         mMoreSuggestionsAvailable = (punctuationSuggestions.size() > countInStrip);
         return countInStrip;
     }
 
-    static void setLayoutWeight(final View v, final float weight, final int height) {
+    static void setLayoutWeightAndSize(final View v, final float weight, final int width, final int height) {
         final ViewGroup.LayoutParams lp = v.getLayoutParams();
         if (lp instanceof final LinearLayout.LayoutParams llp) {
             llp.weight = weight;
-            llp.width = 0;
+            llp.width = width;
             llp.height = height;
         }
     }

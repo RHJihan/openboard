@@ -90,9 +90,12 @@ class ClipboardHistoryManager(
         if (onHistoryChangeListener != null) {
             onHistoryChangeListener?.onClipboardHistoryEntriesRemoved(pos, count)
         }
+        if (latinIME.mSettings.current.mSuggestClipboardContent) {
+            latinIME.clearSuggestions() // get rid of any clipboard suggestion
+        }
     }
 
-    fun canRemove(index: Int) = historyEntries.getOrNull(index)?.isPinned != true
+    fun canRemove(index: Int) = index in 0 until historyEntries.size && !historyEntries[index].isPinned
 
     fun removeEntry(index: Int) {
         if (canRemove(index))
@@ -131,6 +134,25 @@ class ClipboardHistoryManager(
         return clipData.getItemAt(0)?.coerceToText(latinIME) ?: ""
     }
 
+    fun retrieveRecentClipboardContent(): String {
+        val clipContent = retrieveClipboardContent().toString()
+        val now = System.currentTimeMillis()
+        val isNewEntry = recentEntry != clipContent
+        val isRecent = (now - recentTimestamp) < SUGGESTION_INTERVAL
+        return if (isNewEntry || isRecent && !suggestionPicked) {
+            if (isNewEntry) {
+                suggestionPicked = false
+                recentEntry = clipContent
+                recentTimestamp = now
+            }
+            clipContent
+        } else "" // empty string indicating clipboard is empty, not recent
+    }
+
+    fun markSuggestionAsPicked() {
+        suggestionPicked = true
+    }
+
     // pinned clips are stored in default shared preferences, not in device protected preferences!
     private fun loadPinnedClips() {
         val pinnedClipString = Settings.readPinnedClipString(latinIME)
@@ -153,5 +175,9 @@ class ClipboardHistoryManager(
     companion object {
         // store pinned clips in companion object so they survive a keyboard switch (which destroys the current instance)
         private val historyEntries: MutableList<ClipboardHistoryEntry> = ArrayList()
+        private var recentEntry: String = ""
+        private var recentTimestamp: Long = 0L
+        private var suggestionPicked: Boolean = false
+        private const val SUGGESTION_INTERVAL = 3 * 60 * 1000L
     }
 }

@@ -32,6 +32,7 @@ public class SuggestedWords {
     public static final int INPUT_STYLE_RECORRECTION = 5;
     public static final int INPUT_STYLE_PREDICTION = 6;
     public static final int INPUT_STYLE_BEGINNING_OF_SENTENCE_PREDICTION = 7;
+    public static final int INPUT_STYLE_PASSWORD = 8;
 
     // The maximum number of suggestions available.
     public static final int MAX_SUGGESTIONS = 18;
@@ -168,6 +169,14 @@ public class SuggestedWords {
         return false;
     }
 
+    /**
+     * The predicator to tell whether this object represents a clipboard suggestion.
+     * @return false if this object doesn't represent a clipboard suggestion
+     */
+    public boolean isClipboardSuggestion(){
+        return !isEmpty() && getInfo(0).isKindOf(SuggestedWordInfo.KIND_CLIPBOARD);
+    }
+
     @Override
     public String toString() {
         // Pretty-print method to help debug
@@ -193,6 +202,11 @@ public class SuggestedWords {
     @NonNull
     public static SuggestedWords getEmptyInstance() {
         return SuggestedWords.EMPTY;
+    }
+
+    public static void clearSuggestedWordInfoList(SuggestedWords suggestedWords){
+        if (suggestedWords == null || suggestedWords.isEmpty()) return;
+        suggestedWords.mSuggestedWordInfoList.clear();
     }
 
     // Should get rid of the first one (what the user typed previously) from suggestions
@@ -243,6 +257,7 @@ public class SuggestedWords {
         // in java for re-correction)
         public static final int KIND_RESUMED = 9;
         public static final int KIND_OOV_CORRECTION = 10; // Most probable string correction
+        public static final int KIND_CLIPBOARD = 11; // Clipboard content suggestion
 
         public static final int KIND_FLAG_POSSIBLY_OFFENSIVE = 0x80000000;
         public static final int KIND_FLAG_EXACT_MATCH = 0x40000000;
